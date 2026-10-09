@@ -1,6 +1,6 @@
 # SideKit installer for Windows — no Rust toolchain or admin rights required.
 #
-#   irm https://raw.githubusercontent.com/pratik-chakravorty/sidekit/master/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/voidwright07/sidekit/master/install.ps1 | iex
 #
 # Options via environment variables (set them before running the line above):
 #   $env:SIDEKIT_VERSION = "v0.1.0"   install a specific release (default: latest)
@@ -22,7 +22,7 @@
   $ProgressPreference = "SilentlyContinue"   # Invoke-WebRequest is much faster without the progress bar
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-  $Repo = "pratik-chakravorty/sidekit"
+  $Repo = "voidwright07/sidekit"
   $Asset = "sidekit-windows-x86_64.zip"      # also runs on Windows on ARM through x64 emulation
   $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\SideKit"
   $Exe = Join-Path $InstallDir "sidekit.exe"

@@ -19,7 +19,7 @@ system expects apps.
 **Windows** (PowerShell, no admin rights needed):
 
 ```powershell
-irm https://raw.githubusercontent.com/pratik-chakravorty/sidekit/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/voidwright07/sidekit/master/install.ps1 | iex
 ```
 
 Installs to `%LOCALAPPDATA%\Programs\SideKit`, adds a Start menu shortcut, puts
@@ -29,7 +29,7 @@ Installs to `%LOCALAPPDATA%\Programs\SideKit`, adds a Start menu shortcut, puts
 **macOS and Linux** (Terminal):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pratik-chakravorty/sidekit/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/voidwright07/sidekit/master/install.sh | sh
 ```
 
 - **macOS** (Apple silicon and Intel): installs `SideKit.app` into
@@ -57,7 +57,7 @@ Uninstalling keeps your preferences (`%APPDATA%\SideKit` on Windows,
 ### Manual download
 
 Grab the file for your platform from the
-[latest release](https://github.com/pratik-chakravorty/sidekit/releases/latest):
+[latest release](https://github.com/voidwright07/sidekit/releases/latest):
 
 | Platform                  | File                             |
 | ------------------------- | -------------------------------- |

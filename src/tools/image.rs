@@ -319,7 +319,7 @@ pub struct QrView {
 
 impl QrView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = editor("https://github.com/pratik-chakravorty/sidekit", "Text or URL to encode", window, cx);
+        let input = editor("https://github.com/voidwright07/sidekit", "Text or URL to encode", window, cx);
         input.update(cx, |s, cx| s.set_soft_wrap(true, window, cx));
         let subs = vec![watch(&input, window, cx, |this: &mut Self, _, cx| this.generate(cx))];
         let mut this = Self { input, level: 1, svg: None, err: None, note: None, read: false, scan: None, wrap: true, _subs: subs };

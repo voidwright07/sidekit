@@ -1,7 +1,7 @@
 #!/bin/sh
 # SideKit installer for macOS and Linux — no Rust toolchain required.
 #
-#   curl -fsSL https://raw.githubusercontent.com/pratik-chakravorty/sidekit/master/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/voidwright07/sidekit/master/install.sh | sh
 #
 # Options (flags, or the matching environment variables when piping into sh):
 #   --version vX.Y.Z   SIDEKIT_VERSION   install a specific release (default: latest)
@@ -10,7 +10,7 @@
 #   --archive FILE     SIDEKIT_ARCHIVE   install from a local release archive (offline)
 set -eu
 
-REPO="pratik-chakravorty/sidekit"
+REPO="voidwright07/sidekit"
 VERSION="${SIDEKIT_VERSION:-latest}"
 PREFIX="${SIDEKIT_PREFIX:-$HOME/.local}"
 UNINSTALL="${SIDEKIT_UNINSTALL:-0}"

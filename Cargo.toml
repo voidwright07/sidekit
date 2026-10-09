@@ -3,7 +3,7 @@ name = "sidekit"
 version = "0.1.5"
 edition = "2024"
 description = "A fast, native developer toolbox built on GPUI"
-repository = "https://github.com/pratik-chakravorty/sidekit"
+repository = "https://github.com/voidwright07/sidekit"
 
 [dependencies]
 gpui-kit = { version = "0.6", features = ["tree-sitter", "tree-sitter-yaml", "tree-sitter-html", "tree-sitter-toml", "tree-sitter-markdown", "tree-sitter-markdown-inline", "tree-sitter-diff", "tree-sitter-sql", "tree-sitter-css", "tree-sitter-javascript", "tree-sitter-typescript", "tree-sitter-python", "tree-sitter-go", "tree-sitter-rust", "tree-sitter-java", "tree-sitter-php"] }
