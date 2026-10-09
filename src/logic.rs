@@ -4,13 +4,25 @@ use base64::Engine as _;
 use serde_json::Value;
 
 pub mod cert;
+pub mod compress;
 pub mod cron;
 pub mod csv;
+pub mod curl;
 pub mod diff;
+pub mod http;
 pub mod iprange;
+pub mod jsoncode;
+pub mod mcp;
 pub mod media;
 pub mod mock;
+pub mod plist;
+pub mod schema;
+pub mod shape;
 pub mod sqlviz;
+pub mod svg;
+pub mod sysinfo;
+pub mod toon;
+pub mod webfmt;
 pub mod workflow;
 pub mod xml;
 
@@ -40,6 +52,14 @@ pub fn group(s: &str, size: usize, sep: &str) -> String {
     }
     parts.reverse();
     parts.join(sep)
+}
+
+/// The first `chars` characters, with an ellipsis when something was cut.
+pub fn clip(s: &str, chars: usize) -> String {
+    match s.char_indices().nth(chars) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
 }
 
 pub fn random_u32() -> u32 {
@@ -771,7 +791,7 @@ pub fn split_words(s: &str) -> Vec<String> {
 fn cap_word(w: &str) -> String {
     let mut c = w.chars();
     match c.next() {
-        Some(f) => f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase(),
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str().to_lowercase().as_str(),
         None => String::new(),
     }
 }
@@ -1370,6 +1390,101 @@ pub fn subnet(input: &str) -> Result<Vec<(&'static str, String)>, String> {
     }
 }
 
+/// Read an address in any of its spellings: dotted or colon notation, a plain
+/// integer, `0x…` hexadecimal, `0b…` binary or dotted binary octets. Strict:
+/// forms that different tools read differently (leading zeros, short dotted
+/// forms like `10.1`) are refused rather than guessed at.
+fn parse_any_ip(t: &str) -> Result<IpAddr, String> {
+    if let Ok(ip) = t.parse::<IpAddr>() {
+        return Ok(ip);
+    }
+    let clean: String = t.chars().filter(|c| *c != '_' && *c != ' ').collect();
+    let lower = clean.to_lowercase();
+    let from_bits = |n: u128, v6: bool| if v6 { IpAddr::V6(Ipv6Addr::from(n)) } else { IpAddr::V4(Ipv4Addr::from(n as u32)) };
+    if let Some(hex) = lower.strip_prefix("0x") {
+        let n = u128::from_str_radix(hex, 16).map_err(|_| format!("\"{t}\" is not a hexadecimal number of up to 32 digits"))?;
+        return Ok(from_bits(n, hex.len() > 8));
+    }
+    if let Some(bin) = lower.strip_prefix("0b") {
+        let n = u128::from_str_radix(bin, 2).map_err(|_| format!("\"{t}\" is not a binary number of up to 128 bits"))?;
+        return Ok(from_bits(n, bin.len() > 32));
+    }
+    let octets: Vec<&str> = clean.split('.').collect();
+    if octets.len() == 4 && octets.iter().all(|o| o.len() == 8 && o.bytes().all(|b| b == b'0' || b == b'1')) {
+        let n = octets.iter().fold(0u32, |n, o| n << 8 | u32::from_str_radix(o, 2).unwrap_or(0));
+        return Ok(IpAddr::V4(Ipv4Addr::from(n)));
+    }
+    if !clean.is_empty() && clean.bytes().all(|b| b.is_ascii_digit()) {
+        let n = clean.parse::<u128>().map_err(|_| format!("{t} is larger than any IPv6 address"))?;
+        return Ok(from_bits(n, n > u32::MAX as u128));
+    }
+    Err(format!("\"{t}\" is not an IP address: use dotted or colon notation, an integer, 0x… or 0b…"))
+}
+
+/// One address in every notation.
+pub fn ip_convert(input: &str) -> Result<Vec<(&'static str, String)>, String> {
+    let t = input.trim();
+    if t.is_empty() {
+        return Err("Type an IPv4 or IPv6 address in any notation".into());
+    }
+    // A pasted `/prefix` is carried along rather than rejected.
+    let (addr, prefix) = match t.split_once('/') {
+        Some((a, p)) => (a.trim(), Some(p.trim())),
+        None => (t, None),
+    };
+    let ip = parse_any_ip(addr)?;
+    let max = if ip.is_ipv4() { 32 } else { 128 };
+    let prefix = match prefix {
+        Some(p) => Some(p.parse::<u32>().ok().filter(|p| *p <= max).ok_or(format!("/{p} is not a prefix between 0 and {max}"))?),
+        None => None,
+    };
+    let mut rows: Vec<(&'static str, String)> = Vec::new();
+    match ip {
+        IpAddr::V4(a) => {
+            let n = u32::from(a);
+            let o = a.octets();
+            let join = |f: &dyn Fn(u8) -> String| o.iter().map(|b| f(*b)).collect::<Vec<_>>().join(".");
+            rows.push(("Address", a.to_string()));
+            rows.push(("Decimal", n.to_string()));
+            rows.push(("Hexadecimal", format!("0x{n:08X}")));
+            rows.push(("Dotted hex", join(&|b| format!("0x{b:02X}"))));
+            rows.push(("Dotted octal", join(&|b| format!("0{b:o}"))));
+            rows.push(("Binary", join(&|b| format!("{b:08b}"))));
+            rows.push(("IPv4-mapped IPv6", format!("::ffff:{a}")));
+            rows.push(("6to4 prefix", format!("{}/48", Ipv6Addr::new(0x2002, (n >> 16) as u16, n as u16, 0, 0, 0, 0, 0))));
+            rows.push(("Reverse DNS", format!("{}.{}.{}.{}.in-addr.arpa", o[3], o[2], o[1], o[0])));
+            rows.push(("Type", ipv4_kind(a).into()));
+            if let Some(p) = prefix {
+                let mask = if p == 0 { 0 } else { u32::MAX << (32 - p) };
+                rows.push(("Network", format!("{}/{p}", Ipv4Addr::from(n & mask))));
+                rows.push(("Netmask", Ipv4Addr::from(mask).to_string()));
+            }
+        }
+        IpAddr::V6(a) => {
+            let n = u128::from(a);
+            let s = a.segments();
+            rows.push(("Address", a.to_string()));
+            rows.push(("Expanded", s.iter().map(|x| format!("{x:04x}")).collect::<Vec<_>>().join(":")));
+            rows.push(("Decimal", n.to_string()));
+            rows.push(("Hexadecimal", format!("0x{n:032X}")));
+            rows.push(("Binary", s.iter().map(|x| format!("{x:016b}")).collect::<Vec<_>>().join(":")));
+            // Addresses that carry an IPv4 address inside them.
+            let embedded = a.to_ipv4_mapped().or_else(|| (s[0] == 0x2002).then(|| Ipv4Addr::from((s[1] as u32) << 16 | s[2] as u32)));
+            if let Some(v4) = embedded {
+                rows.push(("Embedded IPv4", v4.to_string()));
+            }
+            let nibbles: String = format!("{n:032x}").chars().rev().flat_map(|c| [c, '.']).collect();
+            rows.push(("Reverse DNS", format!("{nibbles}ip6.arpa")));
+            rows.push(("Type", ipv6_kind(a).into()));
+            if let Some(p) = prefix {
+                let mask = if p == 0 { 0 } else { u128::MAX << (128 - p) };
+                rows.push(("Network", format!("{}/{p}", Ipv6Addr::from(n & mask))));
+            }
+        }
+    }
+    Ok(rows)
+}
+
 pub const MAC_FORMATS: &[&str] = &["00:1A:2B:3C:4D:5E", "00-1A-2B-3C-4D-5E", "001A.2B3C.4D5E", "001A2B3C4D5E"];
 
 /// A random unicast MAC address in one of `MAC_FORMATS`. `local` sets the
@@ -1540,6 +1655,15 @@ pub fn detect(text: &str) -> Option<(ToolId, &'static str)> {
     }
     if single_line && t.starts_with("data:image/") && t.contains(";base64,") {
         return Some((ToolId::B64Image, "an image data URI"));
+    }
+    if t.starts_with("curl ") || t.starts_with("curl.exe ") {
+        return Some((ToolId::Curl, "a cURL command"));
+    }
+    if t.contains("<plist") && t.ends_with("</plist>") {
+        return Some((ToolId::Plist, "a property list"));
+    }
+    if (t.starts_with("<svg") || t.starts_with("<?xml")) && t.ends_with("</svg>") {
+        return Some((ToolId::Svg, "an SVG image"));
     }
     let parts: Vec<&str> = t.split('.').collect();
     if single_line && parts.len() == 3 && parts[0].starts_with("eyJ") {
@@ -1722,6 +1846,38 @@ mod tests {
     }
 
     #[test]
+    fn ip_notations() {
+        let get = |input: &str, k: &str| ip_convert(input).unwrap().into_iter().find(|r| r.0 == k).map(|r| r.1);
+        for spelling in ["192.168.1.1", "3232235777", "0xC0A80101", "0b11000000101010000000000100000001", "11000000.10101000.00000001.00000001", " 192.168.1.1/24 "] {
+            assert_eq!(get(spelling, "Address").as_deref(), Some("192.168.1.1"), "{spelling}");
+        }
+        assert_eq!(get("192.168.1.1", "Decimal").as_deref(), Some("3232235777"));
+        assert_eq!(get("192.168.1.1", "Hexadecimal").as_deref(), Some("0xC0A80101"));
+        assert_eq!(get("192.168.1.1", "Dotted hex").as_deref(), Some("0xC0.0xA8.0x01.0x01"));
+        assert_eq!(get("192.168.1.1", "Dotted octal").as_deref(), Some("0300.0250.01.01"));
+        assert_eq!(get("192.168.1.1", "Binary").as_deref(), Some("11000000.10101000.00000001.00000001"));
+        assert_eq!(get("192.168.1.1", "6to4 prefix").as_deref(), Some("2002:c0a8:101::/48"));
+        assert_eq!(get("192.168.1.1", "Network"), None);
+        assert_eq!(get("192.168.1.77/24", "Network").as_deref(), Some("192.168.1.0/24"));
+        assert_eq!(get("192.168.1.77/24", "Netmask").as_deref(), Some("255.255.255.0"));
+
+        // RFC 5952: lower case, the longest run of zeros collapsed.
+        assert_eq!(get("2001:0DB8:0000:0000:0000:0000:0000:0001", "Address").as_deref(), Some("2001:db8::1"));
+        assert_eq!(get("2001:db8::1", "Expanded").as_deref(), Some("2001:0db8:0000:0000:0000:0000:0000:0001"));
+        assert_eq!(get("0x20010db8000000000000000000000001", "Address").as_deref(), Some("2001:db8::1"));
+        assert_eq!(get("42540766411282592856903984951653826561", "Address").as_deref(), Some("2001:db8::1"));
+        assert_eq!(get("::ffff:10.0.0.1", "Embedded IPv4").as_deref(), Some("10.0.0.1"));
+        assert_eq!(get("2002:c0a8:101::", "Embedded IPv4").as_deref(), Some("192.168.1.1"));
+        assert_eq!(get("2001:db8::1/32", "Network").as_deref(), Some("2001:db8::/32"));
+        assert!(get("::1", "Reverse DNS").unwrap().starts_with("1.0.0.0."));
+
+        // Ambiguous or malformed spellings are refused, not guessed at.
+        for bad in ["192.168.1", "010.0.0.1", "256.1.1.1", "1.2.3.4/33", "0xZZ", "hello", "", "2001:db8::1/129"] {
+            assert!(ip_convert(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn network_ids() {
         let m = mac_address(0, false, true);
         assert_eq!(m.len(), 17);
@@ -1806,6 +1962,9 @@ WHERE
         assert_eq!(detect("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----").map(|d| d.0), Some(ToolId::Cert));
         assert_eq!(detect("data:image/png;base64,iVBORw0KGgo=").map(|d| d.0), Some(ToolId::B64Image));
         assert_eq!(detect("https://example.com/search?q=a").map(|d| d.0), Some(ToolId::UrlParse));
+        assert_eq!(detect("curl -s https://example.com").map(|d| d.0), Some(ToolId::Curl));
+        assert_eq!(detect("<svg viewBox=\"0 0 1 1\"><path d=\"M0 0\"/></svg>").map(|d| d.0), Some(ToolId::Svg));
+        assert_eq!(detect("<?xml version=\"1.0\"?>\n<plist version=\"1.0\"><dict/></plist>").map(|d| d.0), Some(ToolId::Plist));
         assert_eq!(detect("https://example.com/"), None);
         assert_eq!(detect("just some words"), None);
         assert_eq!(detect("12345"), None);

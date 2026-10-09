@@ -13,6 +13,8 @@ pub struct CertInfo {
     pub rows: Vec<(&'static str, String)>,
     /// Whole days until expiry; negative once expired.
     pub days_left: i64,
+    /// When it expires, as a Unix timestamp.
+    pub expires: i64,
     pub not_yet_valid: bool,
 }
 
@@ -28,7 +30,8 @@ fn date(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0).map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string()).unwrap_or_default()
 }
 
-fn describe(der: &[u8]) -> Result<CertInfo, String> {
+/// One DER-encoded certificate.
+pub fn describe(der: &[u8]) -> Result<CertInfo, String> {
     let (_, cert) = X509Certificate::from_der(der).map_err(|e| format!("Not a valid X.509 certificate: {e}"))?;
     let subject = cert.subject();
     let title = subject
@@ -107,7 +110,7 @@ fn describe(der: &[u8]) -> Result<CertInfo, String> {
         use sha1::Digest as _;
         sha1::Sha1::digest(der).iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":")
     }));
-    Ok(CertInfo { title, rows, days_left, not_yet_valid: from > now })
+    Ok(CertInfo { title, rows, days_left, expires: to, not_yet_valid: from > now })
 }
 
 /// Every certificate in the input, in order.

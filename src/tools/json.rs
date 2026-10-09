@@ -1,14 +1,15 @@
 use gpui_kit::component::input::{Input, InputEvent, InputState, EditorState};
 use gpui_kit::{
-    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, Styled, Subscription, Task, Window, div, prelude::FluentBuilder, px,
+    App, AppContext, Context, Entity, ExternalPaths, InteractiveElement, IntoElement, ParentElement,
+    PathPromptOptions, Render, SharedString, Styled, Subscription, Task, Window, div,
+    prelude::FluentBuilder, px,
 };
 
 use super::*;
 use super::big::{self, has_long_line};
 use crate::logic::{self, Indent, plural};
 use crate::registry::ToolId;
-use crate::ui::{self, Tone};
+use crate::ui::{self, BtnKind, Tone};
 
 /// Output state shared by the JSON tools.
 #[derive(Default)]
@@ -116,7 +117,7 @@ impl Io {
         let in_len = self.input.read(cx).text().len();
         big::fit_language(&self.input, self.langs.0, in_len, cx);
         big::fit_language(&self.output, self.langs.1, shown.len(), cx);
-        set_text(&self.output, shown, window, cx);
+        set_text(&self.output, &tabs_shown(shown), window, cx);
         self.finder.refresh(cx);
         cx.notify();
     }
@@ -372,7 +373,7 @@ impl Render for JsonFmtView {
     }
 }
 
-// ------------------------------------------------------------ JSON ↔ YAML / TOML
+// ------------------------------------------------------------ JSON ↔ YAML / TOML / CSV / plist
 
 const INDENT_STEPS: &[&str] = &["2 spaces", "4 spaces"];
 
@@ -381,6 +382,7 @@ enum Other {
     Yaml,
     Toml,
     Csv,
+    Plist,
 }
 
 impl Other {
@@ -389,6 +391,7 @@ impl Other {
             Other::Yaml => "YAML",
             Other::Toml => "TOML",
             Other::Csv => "CSV",
+            Other::Plist => "Plist",
         }
     }
 
@@ -397,6 +400,8 @@ impl Other {
             Other::Yaml => "yaml",
             Other::Toml => "toml",
             Other::Csv => "plaintext",
+            // XML property lists read well with the markup grammar.
+            Other::Plist => "html",
         }
     }
 
@@ -405,6 +410,7 @@ impl Other {
             Other::Yaml => &["JSON → YAML", "YAML → JSON"],
             Other::Toml => &["JSON → TOML", "TOML → JSON"],
             Other::Csv => &["JSON → CSV", "CSV → JSON"],
+            Other::Plist => &["JSON → Plist", "Plist → JSON"],
         }
     }
 }
@@ -417,6 +423,7 @@ fn convert(src: &str, other: Other, reverse: bool, step: usize) -> Out {
         (true, Other::Yaml) => logic::parse_yaml(src),
         (true, Other::Toml) => logic::parse_toml(src),
         (true, Other::Csv) => logic::csv::csv_to_json(src, true),
+        (true, Other::Plist) => logic::plist::plist_to_json(src),
     };
     let v = match parsed {
         Ok(v) => v,
@@ -427,6 +434,7 @@ fn convert(src: &str, other: Other, reverse: bool, step: usize) -> Out {
         (false, Other::Yaml) => Ok(logic::to_yaml(&v, 0, step)),
         (false, Other::Toml) => logic::to_toml(&v),
         (false, Other::Csv) => logic::csv::json_to_csv(&v, ','),
+        (false, Other::Plist) => logic::plist::json_to_plist(&v),
     };
     match text {
         Ok(t) => {
@@ -437,7 +445,7 @@ fn convert(src: &str, other: Other, reverse: bool, step: usize) -> Out {
     }
 }
 
-/// JSON to YAML or TOML, and back.
+/// JSON to YAML, TOML, CSV or a property list, and back.
 pub struct DataConvView {
     other: Other,
     reverse: bool,
@@ -452,22 +460,74 @@ impl DataConvView {
         let other = match id {
             ToolId::JsonToml => Other::Toml,
             ToolId::JsonCsv => Other::Csv,
+            ToolId::Plist => Other::Plist,
             _ => Other::Yaml,
         };
         let sample = match other {
             Other::Yaml => "{\n  \"service\": \"api-gateway\",\n  \"replicas\": 3,\n  \"ports\": [80, 443],\n  \"env\": { \"LOG_LEVEL\": \"info\", \"CACHE\": true },\n  \"routes\": [\n    { \"path\": \"/users\", \"timeout\": 30 },\n    { \"path\": \"/orders\", \"timeout\": 45 }\n  ]\n}",
             Other::Csv => "[\n  { \"id\": 1, \"name\": \"Ada Lovelace\", \"email\": \"ada@example.com\", \"address\": { \"city\": \"London\" } },\n  { \"id\": 2, \"name\": \"Alan Turing\", \"email\": \"alan@example.com\", \"address\": { \"city\": \"Manchester\" } }\n]",
             Other::Toml => "{\n  \"package\": { \"name\": \"sidekit\", \"version\": \"0.1.0\", \"edition\": \"2024\" },\n  \"dependencies\": {\n    \"serde\": { \"version\": \"1\", \"features\": [\"derive\"] },\n    \"base64\": \"0.22\"\n  }\n}",
+            Other::Plist => "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>CFBundleName</key>\n  <string>SideKit</string>\n  <key>CFBundleShortVersionString</key>\n  <string>0.2.0</string>\n  <key>LSMinimumSystemVersion</key>\n  <string>12.0</string>\n  <key>NSHighResolutionCapable</key>\n  <true/>\n  <key>CFBundleURLTypes</key>\n  <array>\n    <dict>\n      <key>CFBundleURLSchemes</key>\n      <array>\n        <string>sidekit</string>\n      </array>\n    </dict>\n  </array>\n</dict>\n</plist>",
         };
-        let (io, find_sub) = Io::new(sample, ("json", other.language()), window, cx);
+        // Property lists are what people arrive with, so that tool starts the other way round.
+        let reverse = other == Other::Plist;
+        let langs = if reverse { (other.language(), "json") } else { ("json", other.language()) };
+        let (io, find_sub) = Io::new(sample, langs, window, cx);
         let subs = vec![
             watch(&io.input, window, cx, Self::recompute),
             watch(&io.output, window, cx, |_, _, _| {}),
             find_sub,
         ];
-        let mut this = Self { other, reverse: false, io, indent: 0, wrap: false, _subs: subs };
+        let mut this = Self { other, reverse, io, indent: 0, wrap: false, _subs: subs };
         this.recompute(window, cx);
+        // TEST-HOOK
+        if let Some(p) = std::env::var_os("SIDEKIT_FILE").filter(|_| other == Other::Plist) {
+            this.open(p.into(), window, cx);
+        }
         this
+    }
+
+    /// Load pasted text in the other format (smart detection).
+    pub fn set_input(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.point(true, cx);
+        set_text(&self.io.input, text, window, cx);
+        self.recompute(window, cx);
+    }
+
+    /// Open a property list file. Binary ones are shown as XML, which is what
+    /// the input pane can hold.
+    fn open(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let xml = std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| logic::plist::parse(&b)).and_then(|v| logic::plist::to_xml(&v, false));
+        match xml {
+            Ok(xml) => self.set_input(&xml, window, cx),
+            Err(e) => {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.io.out = Out { err: Some(e), status: format!("Could not open {name}"), tone: Some(Tone::Err), ..Default::default() };
+                set_text(&self.io.output, "", window, cx);
+                cx.notify();
+            }
+        }
+    }
+
+    fn pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some("Open".into()) });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(mut paths))) = rx.await {
+                if let Some(p) = paths.pop() {
+                    let _ = this.update_in(cx, |v, w, cx| v.open(p, w, cx));
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Set the direction and the grammars that go with it.
+    fn point(&mut self, reverse: bool, cx: &mut Context<Self>) {
+        self.reverse = reverse;
+        let (a, b) = if reverse { (self.other.language(), "json") } else { ("json", self.other.language()) };
+        self.io.langs = (a, b);
+        self.io.input.update(cx, |s, cx| s.set_highlighter(a, cx));
+        self.io.output.update(cx, |s, cx| s.set_highlighter(b, cx));
     }
 
     fn recompute(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -485,11 +545,7 @@ impl DataConvView {
             let text = self.io.out.text.to_string();
             set_text(&self.io.input, &text, window, cx);
         }
-        self.reverse = reverse;
-        let (a, b) = if reverse { (self.other.language(), "json") } else { ("json", self.other.language()) };
-        self.io.langs = (a, b);
-        self.io.input.update(cx, |s, cx| s.set_highlighter(a, cx));
-        self.io.output.update(cx, |s, cx| s.set_highlighter(b, cx));
+        self.point(reverse, cx);
         self.recompute(window, cx);
     }
 }
@@ -513,12 +569,23 @@ impl Render for DataConvView {
             (Other::Toml, true) => ("jsontoml", ("TOML", "JSON")),
             (Other::Csv, false) => ("jsoncsv", ("JSON", "CSV")),
             (Other::Csv, true) => ("jsoncsv", ("CSV", "JSON")),
+            (Other::Plist, false) => ("plist", ("JSON", "Property list")),
+            (Other::Plist, true) => ("plist", ("Property list", "JSON")),
         };
+        let plist = self.other == Other::Plist;
         div()
+            .id("conv-root")
             .flex()
             .flex_col()
             .gap(px(6.))
             .flex_1()
+            .when(plist, |d| {
+                d.on_drop(cx.listener(|this, paths: &ExternalPaths, w, cx| {
+                    if let Some(p) = paths.paths().first().cloned() {
+                        this.open(p, w, cx);
+                    }
+                }))
+            })
             .child(ui::section_label("Configuration", &pal))
             .child(ui::setting(
                 "conv-dir",
@@ -528,6 +595,16 @@ impl Render for DataConvView {
                 ui::seg("conv-dir-seg", self.other.directions(), self.reverse as usize, &pal, on_dir),
                 &pal,
             ))
+            .when(plist, |d| {
+                d.child(ui::setting(
+                    "plist-open",
+                    ui::setting_icon("folder", &pal),
+                    "Open a file",
+                    Some("Binary property lists cannot be pasted: open one, or drop it here".into()),
+                    ui::btn("plist-pick", Some("folder"), "Open…", BtnKind::Normal, &pal, cx.listener(|this, _, w, cx| this.pick(w, cx))),
+                    &pal,
+                ))
+            })
             .when(has_indent, |d| {
                 d.child(ui::setting(
                     "indent",

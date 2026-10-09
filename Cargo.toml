@@ -6,7 +6,7 @@ description = "A fast, native developer toolbox built on GPUI"
 repository = "https://github.com/pratik-chakravorty/sidekit"
 
 [dependencies]
-gpui-kit = { version = "0.6", features = ["tree-sitter", "tree-sitter-yaml", "tree-sitter-html", "tree-sitter-toml", "tree-sitter-markdown", "tree-sitter-markdown-inline", "tree-sitter-diff", "tree-sitter-sql"] }
+gpui-kit = { version = "0.6", features = ["tree-sitter", "tree-sitter-yaml", "tree-sitter-html", "tree-sitter-toml", "tree-sitter-markdown", "tree-sitter-markdown-inline", "tree-sitter-diff", "tree-sitter-sql", "tree-sitter-css", "tree-sitter-javascript", "tree-sitter-typescript", "tree-sitter-python", "tree-sitter-go", "tree-sitter-rust", "tree-sitter-java", "tree-sitter-php"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 base64 = "0.22"
@@ -27,6 +27,20 @@ x509-parser = "0.18"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 global-hotkey = "0.8.0"
 async-channel = "2"
+dprint-plugin-typescript = "0.96"
+deno_ast = { version = "0.53", features = ["codegen"] }
+malva = "0.16"
+plist = { version = "1", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff", "ico"] }
+kamadak-exif = "0.6"
+rqrr = { version = "0.11", default-features = false }
+ureq = { version = "3", features = ["platform-verifier"] }
+sysinfo = { version = "0.31", default-features = false, features = ["system", "disk", "network"] }
+flate2 = "1"
+bzip2 = "0.6"
+brotli = "9"
+zstd = "0.14"
+liblzma = "0.4"
 
 [build-dependencies]
 winresource = "0.1"

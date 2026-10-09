@@ -177,6 +177,10 @@ impl SideKit {
             _subs: vec![activation, lib_nav, appearance],
         };
         this.check_clipboard(cx);
+        // TEST-HOOK
+        if let Some(t) = std::env::var("SIDEKIT_OPEN").ok().and_then(|k| TOOLS.iter().find(|t| t.key == k)) {
+            this.go(View::Tool(t.id), window, cx);
+        }
         this
     }
 

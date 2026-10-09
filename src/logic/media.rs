@@ -122,9 +122,222 @@ pub fn qr_svg(text: &str, level: usize) -> Result<(String, usize), String> {
     Ok((svg, code.width()))
 }
 
+/// Every QR code found in an image, as text.
+pub fn read_qr(bytes: &[u8]) -> Result<Vec<String>, String> {
+    let image = image::load_from_memory(bytes).map_err(|_| "That file is not an image this tool can read".to_string())?;
+    let scan = |img: &image::GrayImage| -> Vec<String> {
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        let mut prepared = rqrr::PreparedImage::prepare_from_greyscale(w, h, |x, y| img.get_pixel(x as u32, y as u32).0[0]);
+        prepared.detect_grids().iter().filter_map(|g| g.decode().ok()).map(|(_, text)| text).collect()
+    };
+    let grey = image.to_luma8();
+    let mut found = scan(&grey);
+    // Photos: a code far larger than it needs to be reads better scaled down.
+    if found.is_empty() && grey.width().max(grey.height()) > 1600 {
+        found = scan(&image.thumbnail(1200, 1200).to_luma8());
+    }
+    if found.is_empty() {
+        return Err("No QR code was found in this image".into());
+    }
+    found.dedup();
+    Ok(found)
+}
+
+// ---------------------------------------------------------------- image converter
+
+pub const CONVERT_FORMATS: &[&str] = &["PNG", "JPEG", "WebP", "GIF", "BMP", "TIFF", "ICO"];
+
+#[derive(Debug)]
+pub struct ImageMeta {
+    pub rows: Vec<(&'static str, String)>,
+    /// EXIF tags and their values, as the camera or editor wrote them.
+    pub exif: Vec<(String, String)>,
+    /// The EXIF data says where the picture was taken.
+    pub has_location: bool,
+}
+
+fn decode_oriented(bytes: &[u8]) -> Result<image::DynamicImage, String> {
+    use image::ImageDecoder as _;
+    let bad = |e: image::ImageError| format!("This image could not be read: {e}");
+    let reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
+    let mut decoder = reader.into_decoder().map_err(bad)?;
+    // Re-encoding drops the EXIF orientation, so turn the pixels instead.
+    let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut image = image::DynamicImage::from_decoder(decoder).map_err(bad)?;
+    image.apply_orientation(orientation);
+    Ok(image)
+}
+
+/// What an image file says about itself.
+pub fn image_meta(bytes: &[u8]) -> Result<ImageMeta, String> {
+    let (mime, ext) = sniff(bytes).ok_or("That file is not a recognized image")?;
+    if ext == "svg" {
+        return Err("SVG is a vector format: SVG to Code converts those".into());
+    }
+    let image = image::load_from_memory(bytes).map_err(|e| format!("This image could not be read: {e}"))?;
+    let (w, h) = (image.width(), image.height());
+    let color = image.color();
+    let channels = match color.channel_count() {
+        1 => "Greyscale",
+        2 => "Greyscale + alpha",
+        3 => "RGB",
+        _ => "RGBA",
+    };
+    let mut rows: Vec<(&'static str, String)> = vec![
+        ("Format", format!("{} ({mime})", ext.to_uppercase())),
+        ("Dimensions", format!("{w} × {h} px")),
+        ("Megapixels", format!("{:.2}", w as f64 * h as f64 / 1e6)),
+        ("Color", format!("{channels}, {} bits per channel", color.bits_per_pixel() / color.channel_count() as u16)),
+        ("Transparency", if color.has_alpha() { "Has an alpha channel".into() } else { "None".into() }),
+        ("File size", super::plural(bytes.len(), "byte")),
+    ];
+    let mut exif_rows = Vec::new();
+    let mut has_location = false;
+    if let Ok(data) = exif::Reader::new().read_from_container(&mut std::io::Cursor::new(bytes)) {
+        for f in data.fields().filter(|f| f.ifd_num == exif::In::PRIMARY) {
+            let name = f.tag.to_string();
+            has_location |= name.starts_with("GPS");
+            // Maker notes and the like are opaque blobs.
+            let value = f.display_value().with_unit(&data).to_string();
+            if name != "MakerNote" && !value.is_empty() {
+                exif_rows.push((name, super::clip(&value, 120)));
+            }
+        }
+        rows.push(("Metadata", super::plural(exif_rows.len(), "EXIF tag")));
+    }
+    Ok(ImageMeta { rows, exif: exif_rows, has_location })
+}
+
+/// Re-encode an image as `CONVERT_FORMATS[format]`. `quality` (1–100) applies
+/// to JPEG. Returns the bytes, the file extension, and a note when the result
+/// differs from the source in more than its format.
+pub fn convert_image(bytes: &[u8], format: usize, quality: u8) -> Result<(Vec<u8>, &'static str, Option<&'static str>), String> {
+    use image::ImageFormat as F;
+    let image = decode_oriented(bytes)?;
+    let bad = |e: image::ImageError| format!("The image could not be converted: {e}");
+    let mut out = std::io::Cursor::new(Vec::new());
+    let mut note = None;
+    let ext = match format {
+        1 => {
+            // JPEG has no transparency: lay the picture over white.
+            let rgba = image.to_rgba8();
+            let mut rgb = image::RgbImage::new(rgba.width(), rgba.height());
+            for (dst, src) in rgb.pixels_mut().zip(rgba.pixels()) {
+                let a = src.0[3] as u32;
+                for i in 0..3 {
+                    dst.0[i] = ((src.0[i] as u32 * a + 255 * (255 - a)) / 255) as u8;
+                }
+            }
+            if image.color().has_alpha() {
+                note = Some("JPEG has no transparency; transparent areas are white");
+            }
+            rgb.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality.clamp(1, 100))).map_err(bad)?;
+            "jpg"
+        }
+        6 => {
+            // An icon holds at most 256 × 256 pixels.
+            let fitted = if image.width() > 256 || image.height() > 256 {
+                note = Some("Scaled down to fit the 256 × 256 px limit of ICO");
+                image.thumbnail(256, 256)
+            } else {
+                image
+            };
+            fitted.to_rgba8().write_to(&mut out, F::Ico).map_err(bad)?;
+            "ico"
+        }
+        other => {
+            let (f, ext) = match other {
+                0 => (F::Png, "png"),
+                2 => (F::WebP, "webp"),
+                3 => (F::Gif, "gif"),
+                4 => (F::Bmp, "bmp"),
+                _ => (F::Tiff, "tiff"),
+            };
+            if other == 2 {
+                note = Some("WebP is written lossless");
+            }
+            // These encoders want 8-bit channels.
+            let eight = if image.color().has_alpha() { image::DynamicImage::ImageRgba8(image.to_rgba8()) } else { image::DynamicImage::ImageRgb8(image.to_rgb8()) };
+            eight.write_to(&mut out, f).map_err(bad)?;
+            ext
+        }
+    };
+    Ok((out.into_inner(), ext, note))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn converts_between_formats() {
+        // 4 × 2, half transparent red on the left, opaque blue on the right.
+        let mut src = image::RgbaImage::new(4, 2);
+        for (x, _, p) in src.enumerate_pixels_mut() {
+            *p = if x < 2 { image::Rgba([255, 0, 0, 0]) } else { image::Rgba([0, 0, 255, 255]) };
+        }
+        let mut png = std::io::Cursor::new(Vec::new());
+        src.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let png = png.into_inner();
+
+        let meta = image_meta(&png).unwrap();
+        let get = |k: &str| meta.rows.iter().find(|r| r.0 == k).unwrap().1.clone();
+        assert_eq!(get("Format"), "PNG (image/png)");
+        assert_eq!(get("Dimensions"), "4 × 2 px");
+        assert_eq!(get("Color"), "RGBA, 8 bits per channel");
+        assert_eq!(get("Transparency"), "Has an alpha channel");
+        assert!(meta.exif.is_empty() && !meta.has_location);
+
+        for (i, ext) in ["png", "jpg", "webp", "gif", "bmp", "tiff", "ico"].iter().enumerate() {
+            let (bytes, got, _) = convert_image(&png, i, 90).unwrap();
+            assert_eq!(got, *ext);
+            assert_eq!(sniff(&bytes).unwrap().1, *ext, "{ext} output should be {ext}");
+            let back = image::load_from_memory(&bytes).unwrap();
+            assert_eq!((back.width(), back.height()), (4, 2));
+        }
+        let (jpg, _, note) = convert_image(&png, 1, 95).unwrap();
+        assert_eq!(note, Some("JPEG has no transparency; transparent areas are white"));
+        let px = image::load_from_memory(&jpg).unwrap().to_rgb8();
+        // The transparent half came out white, not black or red.
+        assert!(px.get_pixel(0, 0).0.iter().all(|c| *c > 200), "{:?}", px.get_pixel(0, 0));
+        assert!(px.get_pixel(3, 1).0[2] > 150 && px.get_pixel(3, 1).0[0] < 100);
+
+        let big = image::DynamicImage::new_rgb8(600, 300);
+        let mut buf = std::io::Cursor::new(Vec::new());
+        big.write_to(&mut buf, image::ImageFormat::Png).unwrap();
+        let (ico, _, note) = convert_image(&buf.into_inner(), 6, 90).unwrap();
+        assert!(note.unwrap().contains("256"));
+        let icon = image::load_from_memory(&ico).unwrap();
+        assert_eq!((icon.width(), icon.height()), (256, 128));
+
+        assert!(convert_image(b"not an image", 0, 90).is_err());
+        assert!(image_meta(b"<svg xmlns='x'/>").unwrap_err().contains("SVG to Code"));
+    }
+
+    #[test]
+    fn reads_qr_codes_it_wrote() {
+        use qrcode::QrCode;
+        let text = "https://example.com/sidekit?q=1";
+        let code = QrCode::new(text.as_bytes()).unwrap();
+        // Render by hand: 8 px modules with a 4-module quiet zone.
+        let (n, scale, quiet) = (code.width(), 8usize, 4usize);
+        let side = ((n + quiet * 2) * scale) as u32;
+        let colors = code.to_colors();
+        let img = image::GrayImage::from_fn(side, side, |x, y| {
+            let (mx, my) = ((x as usize / scale).wrapping_sub(quiet), (y as usize / scale).wrapping_sub(quiet));
+            let dark = mx < n && my < n && colors[my * n + mx] == qrcode::Color::Dark;
+            image::Luma([if dark { 0 } else { 255 }])
+        });
+        let mut png = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        assert_eq!(read_qr(&png.into_inner()).unwrap(), [text]);
+
+        let blank = image::GrayImage::from_pixel(64, 64, image::Luma([255]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        blank.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        assert_eq!(read_qr(&png.into_inner()).unwrap_err(), "No QR code was found in this image");
+        assert!(read_qr(b"nope").is_err());
+    }
 
     // A 3×2 PNG.
     const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAEUlEQVR4nGP4z8DwH4YZkDkAm34L9XKwuTwAAAAASUVORK5CYII=";

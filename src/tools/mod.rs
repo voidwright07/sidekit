@@ -4,14 +4,22 @@
 pub mod big;
 mod cert;
 mod codec;
+mod codegen;
+mod compress;
 mod color;
 mod cron;
 mod date;
 mod diff;
+mod http;
 mod image;
 mod jsonpath;
 mod markdown;
+mod mcp;
 mod mock;
+mod profile;
+mod schema;
+mod svg;
+mod sysinfo;
 mod transform;
 mod hash;
 mod json;
@@ -28,6 +36,7 @@ mod textcase;
 mod unicode;
 mod urlparse;
 mod uuid;
+mod webfmt;
 
 #[cfg(test)]
 mod syntax_tests;
@@ -35,8 +44,9 @@ mod syntax_tests;
 use gpui_kit::base::input::{InputBaseState, MultiLineMode};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, InputState, Textarea, TextareaState, Input};
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Styled,
-    Subscription, Window, div, prelude::FluentBuilder, px, relative,
+    AnyView, App, AppContext, Context, Entity, ExternalPaths, Focusable, InteractiveElement,
+    IntoElement, ParentElement, PathPromptOptions, SharedString, Styled, Subscription, Window, div,
+    prelude::FluentBuilder, px, relative,
 };
 
 use crate::registry::{Mode, ToolId};
@@ -48,14 +58,24 @@ use crate::ui;
 pub fn create(id: ToolId, window: &mut Window, cx: &mut App) -> AnyView {
     match id {
         ToolId::JsonFmt => cx.new(|cx| json::JsonFmtView::new(window, cx)).into(),
-        ToolId::JsonYaml | ToolId::JsonToml | ToolId::JsonCsv => cx.new(|cx| json::DataConvView::new(id, window, cx)).into(),
-        ToolId::Sql | ToolId::Xml | ToolId::IpRange => cx.new(|cx| transform::TransformView::new(id, window, cx)).into(),
+        ToolId::JsonYaml | ToolId::JsonToml | ToolId::JsonCsv | ToolId::Plist => cx.new(|cx| json::DataConvView::new(id, window, cx)).into(),
+        ToolId::Sql | ToolId::Xml | ToolId::IpRange | ToolId::Toon => cx.new(|cx| transform::TransformView::new(id, window, cx)).into(),
+        ToolId::Curl | ToolId::JsonCode => cx.new(|cx| codegen::CodeGenView::new(id, window, cx)).into(),
+        ToolId::WebFmt => cx.new(|cx| webfmt::WebFmtView::new(window, cx)).into(),
+        ToolId::Schema => cx.new(|cx| schema::SchemaView::new(window, cx)).into(),
+        ToolId::Svg => cx.new(|cx| svg::SvgView::new(window, cx)).into(),
+        ToolId::ImageConv => cx.new(|cx| image::ImageConvView::new(window, cx)).into(),
+        ToolId::Http => cx.new(|cx| http::HttpView::new(window, cx)).into(),
+        ToolId::Mcp => cx.new(|cx| mcp::McpView::new(window, cx)).into(),
+        ToolId::Profile => cx.new(|cx| profile::ProfileView::new(window, cx)).into(),
+        ToolId::SysInfo => cx.new(|cx| sysinfo::SysInfoView::new(window, cx)).into(),
+        ToolId::Compress => cx.new(|cx| compress::CompressView::new(window, cx)).into(),
         ToolId::SqlViz => cx.new(|cx| sqlviz::SqlVizView::new(window, cx)).into(),
         ToolId::Cron => cx.new(|cx| cron::CronView::new(window, cx)).into(),
         ToolId::JsonPath => cx.new(|cx| jsonpath::JsonPathView::new(window, cx)).into(),
         ToolId::TextDiff => cx.new(|cx| diff::TextDiffView::new(window, cx)).into(),
         ToolId::DataDiff => cx.new(|cx| diff::DataDiffView::new(window, cx)).into(),
-        ToolId::Markdown => cx.new(|cx| markdown::MarkdownView::new(window, cx)).into(),
+        ToolId::Markdown | ToolId::HtmlPreview => cx.new(|cx| markdown::MarkdownView::new(id == ToolId::HtmlPreview, window, cx)).into(),
         ToolId::B64Image => cx.new(|cx| image::B64ImageView::new(window, cx)).into(),
         ToolId::Qr => cx.new(|cx| image::QrView::new(window, cx)).into(),
         ToolId::Cert => cx.new(|cx| cert::CertView::new(window, cx)).into(),
@@ -76,7 +96,7 @@ pub fn create(id: ToolId, window: &mut Window, cx: &mut App) -> AnyView {
         ToolId::UrlParse => cx.new(|cx| urlparse::UrlParseView::new(window, cx)).into(),
         ToolId::Lines => cx.new(|cx| lines::LinesView::new(window, cx)).into(),
         ToolId::Unicode => cx.new(|cx| unicode::UnicodeView::new(window, cx)).into(),
-        ToolId::Subnet => cx.new(|cx| subnet::SubnetView::new(window, cx)).into(),
+        ToolId::Subnet | ToolId::IpConv => cx.new(|cx| subnet::SubnetView::new(id, window, cx)).into(),
         ToolId::Mac => cx.new(|cx| netgen::MacView::new(window, cx)).into(),
         ToolId::Ula => cx.new(|cx| netgen::UlaView::new(window, cx)).into(),
     }
@@ -132,6 +152,21 @@ pub fn fill(id: ToolId, view: &AnyView, text: &str, window: &mut Window, cx: &mu
                 e.update(cx, |t, cx| t.set_input(text, window, cx));
             }
         }
+        ToolId::Curl => {
+            if let Ok(e) = v.downcast::<codegen::CodeGenView>() {
+                e.update(cx, |t, cx| t.set_input(text, window, cx));
+            }
+        }
+        ToolId::Svg => {
+            if let Ok(e) = v.downcast::<svg::SvgView>() {
+                e.update(cx, |t, cx| t.set_input(text, window, cx));
+            }
+        }
+        ToolId::Plist => {
+            if let Ok(e) = v.downcast::<json::DataConvView>() {
+                e.update(cx, |t, cx| t.set_input(text, window, cx));
+            }
+        }
         _ => {}
     }
 }
@@ -142,6 +177,10 @@ pub fn set_mode(view: &AnyView, mode: Mode, window: &mut Window, cx: &mut App) {
     if let Ok(e) = v.clone().downcast::<codec::CodecView>() {
         if let Mode::Encode | Mode::Decode = mode {
             e.update(cx, |t, cx| t.set_decode(mode == Mode::Decode, window, cx));
+        }
+    } else if let Ok(e) = v.clone().downcast::<compress::CompressView>() {
+        if let Mode::Encode | Mode::Decode = mode {
+            e.update(cx, |t, cx| t.set_decompress(mode == Mode::Decode, window, cx));
         }
     } else if let Ok(e) = v.clone().downcast::<date::DateView>() {
         if let Mode::ToDate | Mode::ToUnix = mode {
@@ -248,6 +287,13 @@ pub fn line_text(state: &Entity<InputState>, cx: &App) -> String {
     state.read(cx).value().to_string()
 }
 
+/// The editor draws a tab character with no width at all, so tab-indented or
+/// tab-separated output would look run together. Panes show each tab as four
+/// spaces; Copy still gives the real text.
+pub fn tabs_shown(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.contains('\t') { s.replace('\t', "    ").into() } else { s.into() }
+}
+
 /// Replace an editor's text without emitting a change event.
 pub fn set_text<M: MultiLineMode>(state: &Entity<InputBaseState<M>>, text: &str, window: &mut Window, cx: &mut App) {
     if state.read(cx).value().as_ref() != text {
@@ -326,6 +372,61 @@ pub fn field_el(state: &Entity<InputState>, mono: bool, height: f32, font: f32, 
                 Input::new(state).appearance(false).text_size(px(font)).when(mono, |i| i.font_family(MONO_FONT)),
             ),
         )
+}
+
+/// A dashed box to drop a file on, with a button that opens the file picker.
+/// `directories` also lets a folder be picked (an app bundle is one).
+pub fn drop_zone<V: 'static>(
+    id: &'static str,
+    label: &'static str,
+    hint: SharedString,
+    directories: bool,
+    pal: &Pal,
+    cx: &mut Context<V>,
+    on_path: fn(&mut V, std::path::PathBuf, &mut Window, &mut Context<V>),
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let p = *pal;
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .p(px(14.))
+        .rounded(px(8.))
+        .border_1()
+        .border_dashed()
+        .border_color(p.stroke_strong)
+        .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(p.accent_soft))
+        .on_drop(cx.listener(move |this, paths: &ExternalPaths, w, cx| {
+            if let Some(path) = paths.paths().first().cloned() {
+                on_path(this, path, w, cx);
+            }
+        }))
+        .child(ui::btn((id, 0usize), Some("folder"), label, ui::BtnKind::Accent, pal, cx.listener(move |_, _, w, cx| {
+            let rx = cx.prompt_for_paths(PathPromptOptions { files: true, directories, multiple: false, prompt: Some("Open".into()) });
+            cx.spawn_in(w, async move |this, cx| {
+                if let Ok(Ok(Some(mut paths))) = rx.await {
+                    if let Some(path) = paths.pop() {
+                        let _ = this.update_in(cx, |v, w, cx| on_path(v, path, w, cx));
+                    }
+                }
+            })
+            .detach();
+        })))
+        .child(div().flex_1().min_w_0().text_size(px(13.)).text_color(p.text3).child(hint))
+}
+
+/// Ask where to save `bytes`, suggesting `name`, then write them there.
+pub fn save_bytes<V: 'static>(bytes: Vec<u8>, name: String, window: &mut Window, cx: &mut Context<V>, done: fn(&mut V, Result<std::path::PathBuf, String>, &mut Context<V>)) {
+    let dir = crate::library::home_dir().unwrap_or_default();
+    let rx = cx.prompt_for_new_path(&dir, Some(&name));
+    cx.spawn_in(window, async move |this, cx| {
+        if let Ok(Ok(Some(path))) = rx.await {
+            let r = std::fs::write(&path, bytes).map(|_| path).map_err(|e| e.to_string());
+            let _ = this.update(cx, |v, cx| done(v, r, cx));
+        }
+    })
+    .detach();
 }
 
 /// Paste and Clear buttons for an input pane head.

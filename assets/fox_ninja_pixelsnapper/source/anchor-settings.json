@@ -1,0 +1,27 @@
+{
+  "tool": "Sprite Fusion Pixel Snapper",
+  "version": "1.0.0",
+  "pixelSize": 40,
+  "colors": 16,
+  "input": "reference/anchor-generated.png",
+  "snapOutput": "reference/anchor-snapped-40.png",
+  "snapDimensions": [
+    31,
+    32
+  ],
+  "crop": [
+    3,
+    1,
+    26,
+    30
+  ],
+  "placement": [
+    1,
+    2
+  ],
+  "finalDimensions": [
+    32,
+    32
+  ],
+  "alphaThreshold": 128
+}

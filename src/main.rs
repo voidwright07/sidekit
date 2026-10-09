@@ -74,6 +74,7 @@ fn main() {
         .detach();
 
         let bounds = Bounds::centered(None, size(px(1320.), px(860.)), cx);
+        let hidden = std::env::var_os("SIDEKIT_OPEN").is_some(); // TEST-HOOK
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
@@ -89,6 +90,8 @@ fn main() {
             window_min_size: Some(size(px(960.), px(600.))),
             window_background: WindowBackgroundAppearance::Opaque,
             app_id: Some("sidekit".into()),
+            focus: !hidden, // TEST-HOOK
+            show: !hidden, // TEST-HOOK
             ..Default::default()
         };
 
@@ -103,6 +106,8 @@ fn main() {
             cx.new(|cx| Root::new(view, window, cx))
         })
         .expect("failed to open the main window");
-        cx.activate(true);
+        if !hidden {
+            cx.activate(true);
+        } // TEST-HOOK
     });
 }

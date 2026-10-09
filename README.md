@@ -210,7 +210,7 @@ kept in git. Set `SIDEKIT_LIBRARY` to use another folder.
 | Category            | Tools                                              |
 | ------------------- | -------------------------------------------------- |
 | Converters          | JSON ⇄ YAML, JSON ⇄ TOML, JSON ⇄ CSV, Number base, Date ⇄ Unix timestamp (both directions, most date formats) |
-| Encoders / Decoders | Base64 text, Base64 image (data URIs), Hex ⇄ text, URL, URL parser, HTML entities, X.509 certificate decoder, JWT decoder |
+| Encoders / Decoders | Base64 text, Base64 image (data URIs), Hex ⇄ text, URL, URL parser, HTML entities, X.509 certificate decoder, JWT decoder, Compression (Gzip, Zlib, Deflate, Brotli, Zstandard, Bzip2, XZ) |
 | Formatters          | JSON (indent, minify, sort, validate, find in output), SQL, XML (with well-formedness check) |
 | Generators          | Hash (MD5, SHA-1/224/256/384/512, CRC-32, HMAC), UUID v4 / v7 and ULID, Password, QR code, Mock data (JSON or CSV), Lorem ipsum |
 | Graphic             | Color converter with WCAG contrast and shades, SQL to ER diagram (MySQL, PostgreSQL, SQLite, Cassandra CQL) |
@@ -263,7 +263,7 @@ Settings from the earlier ToyDev name are picked up automatically.
 | `src/ui.rs`       | Design components (settings rows, toggles, panes, …)    |
 | `src/theme.rs`    | Design tokens and the bridge to gpui-component's theme  |
 | `src/logic.rs`    | Pure conversion logic and clipboard detection, tested   |
-| `src/logic/`      | Larger pure modules (CSV, cron, diff, XML, certificates, IP ranges, images / QR, mock data, SQL diagrams, workflow steps), tested |
+| `src/logic/`      | Larger pure modules (CSV, cron, diff, XML, certificates, compression, IP ranges, images / QR, mock data, SQL diagrams, workflow steps), tested |
 | `src/library.rs`  | AI library storage, import, credential scan, install targets, tested |
 | `src/library_view.rs` | AI library page                                     |
 | `src/workflows.rs` | Saved workflow files                                   |

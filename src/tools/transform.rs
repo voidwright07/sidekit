@@ -1,4 +1,4 @@
-//! Input → output tools with one choice of mode: SQL, XML and IP ranges.
+//! Input → output tools with one choice of mode: SQL, XML, TOON and IP ranges.
 
 use gpui_kit::component::input::EditorState;
 use gpui_kit::{
@@ -48,6 +48,23 @@ fn spec(id: ToolId) -> Spec {
                 let indent = [Some(2), Some(4), None][mode.min(2)];
                 let out = logic::xml::format_xml(s, indent)?;
                 Ok((out, "Well-formed XML".into()))
+            },
+        },
+        ToolId::Toon => Spec {
+            label: "Delimiter",
+            modes: logic::toon::DELIMITERS,
+            hint: "Separates array values and table cells; tabs often cost the fewest tokens",
+            sample: "{\n  \"project\": \"SideKit\",\n  \"tags\": [\"offline\", \"native\", \"fast\"],\n  \"release\": { \"version\": \"0.2.0\", \"stable\": true },\n  \"tools\": [\n    { \"id\": 1, \"name\": \"JSON Formatter\", \"category\": \"Formatters\" },\n    { \"id\": 2, \"name\": \"JWT Decoder\", \"category\": \"Encoders\" },\n    { \"id\": 3, \"name\": \"Regex Tester\", \"category\": \"Testers\" }\n  ]\n}",
+            languages: ("json", "plaintext"),
+            run: |s, mode| {
+                let v: serde_json::Value = serde_json::from_str(s).map_err(|e| logic::json_err(&e))?;
+                let out = logic::toon::encode(&v, mode);
+                // Against the most compact JSON, so the saving is not just whitespace.
+                let json = serde_json::to_string(&v).map(|j| j.len()).unwrap_or(0).max(1);
+                let saved = 100 - (out.len() * 100 / json) as i64;
+                let change = if saved >= 0 { format!("{saved}% smaller than minified JSON") } else { format!("{}% larger than minified JSON", -saved) };
+                let status = format!("{} · {change}", plural(out.lines().count(), "line"));
+                Ok((out, status))
             },
         },
         _ => Spec {
@@ -124,7 +141,7 @@ impl TransformView {
                 status = format!("{status} · {}", big::SHORTENED);
             }
             big::fit_language(&this.output, this.spec.languages.1, out.len(), cx);
-            set_text(&this.output, shown.as_deref().unwrap_or(&out), window, cx);
+            set_text(&this.output, &tabs_shown(shown.as_deref().unwrap_or(&out)), window, cx);
             this.out = out.into();
             this.status = status;
             this.err = err;

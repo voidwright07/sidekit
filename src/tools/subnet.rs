@@ -1,4 +1,4 @@
-//! IPv4 / IPv6 subnet calculator and address converter.
+//! IPv4 / IPv6 subnet calculator, and the address converter that shares its layout.
 
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
@@ -7,19 +7,25 @@ use gpui_kit::{
 };
 
 use super::*;
-use crate::logic::subnet;
+use crate::logic;
+use crate::registry::ToolId;
 use crate::ui;
 
 pub struct SubnetView {
     input: Entity<InputState>,
+    compute: fn(&str) -> Result<Vec<(&'static str, String)>, String>,
     _subs: Vec<Subscription>,
 }
 
 impl SubnetView {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = line("192.168.1.130/26", "e.g. 10.0.0.1/24, 10.0.0.1 255.255.255.0 or 2001:db8::1/64", window, cx);
+    pub fn new(id: ToolId, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let (sample, hint, compute): (_, _, fn(&str) -> Result<Vec<(&'static str, String)>, String>) = match id {
+            ToolId::IpConv => ("192.168.1.1", "e.g. 192.168.1.1, 3232235777, 0xC0A80101, 2001:db8::1 or 10.0.0.1/24", logic::ip_convert),
+            _ => ("192.168.1.130/26", "e.g. 10.0.0.1/24, 10.0.0.1 255.255.255.0 or 2001:db8::1/64", logic::subnet),
+        };
+        let input = line(sample, hint, window, cx);
         let subs = vec![watch(&input, window, cx, |_, _, cx| cx.notify())];
-        Self { input, _subs: subs }
+        Self { input, compute, _subs: subs }
     }
 
     pub fn set_input(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -32,7 +38,7 @@ impl Render for SubnetView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pal = Pal::get(cx);
         let raw = line_text(&self.input, cx);
-        let (rows, err) = match subnet(&raw) {
+        let (rows, err) = match (self.compute)(&raw) {
             Ok(r) => (r, None),
             Err(_) if raw.trim().is_empty() => (Vec::new(), None),
             Err(e) => (Vec::new(), Some(e)),
