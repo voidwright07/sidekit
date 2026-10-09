@@ -7,7 +7,7 @@
   <key>CFBundleDisplayName</key>
   <string>SideKit</string>
   <key>CFBundleIdentifier</key>
-  <string>io.github.pratik-chakravorty.sidekit</string>
+  <string>io.github.voidwright07.sidekit</string>
   <key>CFBundleExecutable</key>
   <string>sidekit</string>
   <key>CFBundleIconFile</key>
