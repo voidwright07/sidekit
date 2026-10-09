@@ -1,6 +1,6 @@
 [package]
 name = "sidekit"
-version = "0.1.2"
+version = "0.1.5"
 edition = "2024"
 description = "A fast, native developer toolbox built on GPUI"
 repository = "https://github.com/pratik-chakravorty/sidekit"
